@@ -67,7 +67,7 @@ if uploaded_file is not None:
         else:
             pacing_msg = "🔴 You're speaking quite quickly. Try pausing occasionally."
 
-        st.markdown(f"""**💬 Average Speech Rate:** {avg_rate} words/10s {pacing_msg}""")
+        st.markdown(f"**Average Speech Rate:** {avg_rate} words/10s  \n{pacing_msg}")
 
 
         # Silence detection
