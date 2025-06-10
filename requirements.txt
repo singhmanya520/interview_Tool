@@ -1,10 +1,10 @@
 streamlit
-openai-whisper
+faster-whisper
+moviepy
+pydub
 transformers
 librosa
 soundfile
-moviepy
-pydub
 matplotlib
 numpy
 pandas
