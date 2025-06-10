@@ -6,5 +6,6 @@ soundfile
 pydub
 transformers
 faster-whisper
+whisper
 torch
 pandas
