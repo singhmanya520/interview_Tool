@@ -6,6 +6,6 @@ soundfile
 pydub
 transformers
 faster-whisper
-whisper
+git+https://github.com/openai/whisper.git#egg=whisper
 torch
 pandas
