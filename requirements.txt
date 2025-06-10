@@ -1,10 +1,10 @@
 streamlit
 numpy
-pandas
 matplotlib
 librosa
 soundfile
-transformers
-torch
 pydub
-whisper
+transformers
+faster-whisper
+torch
+pandas
