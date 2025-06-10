@@ -68,7 +68,7 @@ if uploaded_file is not None:
         else:
             pacing_msg = "🔴 You're speaking quite quickly. Try pausing occasionally."
 
-        st.markdown(f"""**💬 Average Speech Rate:** {avg_rate} words/10s  
+        st.markdown(f"""**💬 Average Speech Rate:** {avg_rate} words/10s  \n{pacing_msg}""")
 {pacing_msg}""")
 
         audio = AudioSegment.from_wav(audio_path)
@@ -133,7 +133,7 @@ if uploaded_file is not None:
         avg_conf = round(np.mean(confidence_vals), 2)
         monotone_count = sum(m['monotone'] for m in tone_metrics)
 
-        st.markdown(f"**💬 Average Confidence:** {avg_conf}  
+        st.markdown(f"""**💬 Average Confidence:** {avg_conf}  \n**Monotone Segments:** {monotone_count}""")
 "
                     f"**Monotone Segments:** {monotone_count}")
 
@@ -200,6 +200,6 @@ Monotone Segments: {monotone_count}
 Each point should appear on a new line.
 '''
         llm_feedback = llm(prompt, max_new_tokens=300, do_sample=False)[0]['generated_text']
-        st.markdown(f"**LLM Feedback:**
+        st.markdown(f"""**LLM Feedback:**  \n{llm_feedback}""")
 
 {llm_feedback}")
