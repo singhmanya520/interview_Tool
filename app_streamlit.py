@@ -1,204 +1,138 @@
+
 import streamlit as st
 import os
-import re
+import tempfile
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 import librosa
+import librosa.display
 import soundfile as sf
-import subprocess
+from faster_whisper import WhisperModel
 from pydub import AudioSegment, silence
-import whisper
-from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
-
-CHUNK_DURATION = 10
-FILLER_WORDS = ["um", "uh", "like", "you know", "so", "actually", "basically", "right"]
+from transformers import pipeline
+import pandas as pd
 
 st.title("🎤 Mock Interview Analyzer")
+uploaded_file = st.file_uploader("Upload your interview audio/video file", type=["mp4", "mp3", "wav"])
 
-uploaded_file = st.file_uploader("Upload your interview video (.mp4)", type=["mp4"])
+def convert_to_wav(file_path):
+    audio = AudioSegment.from_file(file_path)
+    wav_path = file_path.replace(".mp4", ".wav").replace(".mp3", ".wav")
+    audio.export(wav_path, format="wav")
+    return wav_path
+
+def transcribe_audio(audio_path):
+    model = WhisperModel("base", device="cpu", compute_type="int8")
+    segments, _ = model.transcribe(audio_path, beam_size=5)
+    transcription = " ".join([seg.text for seg in segments])
+    return transcription, list(segments)
+
+def detect_emotion(audio_path):
+    try:
+        classifier = pipeline(
+            "audio-classification",
+            model="superb/wav2vec2-base-superb-er",
+            device=-1
+        )
+        result = classifier(audio_path)
+        emotion = result[0]['label']
+        score = result[0]['score']
+        return emotion, round(score, 2)
+    except Exception as e:
+        return "Unknown", 0.0
+
+def count_filler_words(transcript):
+    filler_words = ['um', 'uh', 'like', 'you know', 'so', 'actually', 'basically']
+    words = transcript.lower().split()
+    return {fw: words.count(fw) for fw in filler_words if words.count(fw) > 0}
+
+def compute_speech_rate(transcript, duration_seconds):
+    word_count = len(transcript.split())
+    words_per_minute = (word_count / duration_seconds) * 60
+    return round(words_per_minute, 2)
+
+def personal_pronoun_ratio(transcript):
+    words = transcript.lower().split()
+    return {
+        "I": words.count("i"),
+        "we": words.count("we"),
+        "you": words.count("you")
+    }
 
 if uploaded_file is not None:
-    with st.spinner("Processing video..."):
-        video_path = "uploaded_video.mp4"
-        audio_path = "interview_audio.wav"
+    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+        tmp_file.write(uploaded_file.read())
+        file_path = tmp_file.name
 
-        with open(video_path, "wb") as f:
-            f.write(uploaded_file.read())
+    st.audio(file_path)
 
-        subprocess.call(['ffmpeg', '-i', video_path, '-vn', '-acodec', 'pcm_s16le', audio_path])
+    audio_path = convert_to_wav(file_path)
 
-        # Whisper Transcription
-        model = whisper.load_model("base")
-        result = model.transcribe(audio_path, word_timestamps=True)
-        full_text = result["text"].lower()
-        segments = result["segments"]
+    try:
+        duration = librosa.get_duration(path=audio_path)
+    except Exception:
+        st.error("Could not read audio duration. Please check your file.")
+        st.stop()
 
-        word_timings = []
-        for segment in segments:
-            for word_data in segment.get("words", []):
-                word_timings.append({
-                    "word": word_data["word"].lower(),
-                    "start": word_data["start"],
-                    "end": word_data["end"]
-                })
+    if duration < 1:
+        st.error("Audio is too short or corrupted.")
+        st.stop()
 
-        duration = word_timings[-1]["end"] if word_timings else 0
-        bins = int(duration // CHUNK_DURATION) + 1
-        speech_rate = [0] * bins
-        for word in word_timings:
-            bin_index = int(word["start"] // CHUNK_DURATION)
-            speech_rate[bin_index] += 1
+    try:
+        transcript, segments = transcribe_audio(audio_path)
+    except Exception as e:
+        st.error(f"Transcription failed: {str(e)}")
+        st.stop()
 
-        st.subheader("📈 Speech Rate Over Time")
-        fig1, ax1 = plt.subplots(figsize=(10, 4))
-        ax1.plot(range(0, CHUNK_DURATION * bins, CHUNK_DURATION), speech_rate, marker='o')
-        ax1.set_title("Words Spoken Every 10 Seconds")
-        ax1.set_xlabel("Time (s)")
-        ax1.set_ylabel("Words")
-        ax1.grid(True)
-        st.pyplot(fig1)
+    if not segments:
+        st.error("No segments returned by transcription model.")
+        st.stop()
 
-        avg_rate = round(np.mean(speech_rate), 1)
-        if avg_rate < 15:
-            pacing_msg = "🟡 You're speaking a bit slowly. Consider picking up the pace slightly."
-        elif avg_rate <= 30:
-            pacing_msg = "🟢 Your pacing is clear and well-controlled."
+    st.subheader("📝 Transcript")
+    st.write(transcript)
+
+    emotion, tone_score = detect_emotion(audio_path)
+    st.subheader("😃 Detected Emotion")
+    st.write(f"**{emotion}** (Confidence: {tone_score})")
+
+    filler_counts = count_filler_words(transcript)
+    if filler_counts:
+        st.subheader("⛔ Filler Words Detected")
+        st.write(filler_counts)
+    else:
+        st.subheader("✅ No common filler words detected!")
+
+    speech_rate = compute_speech_rate(transcript, duration)
+    st.subheader("📊 Speech Rate")
+    st.write(f"{speech_rate} words per minute")
+    if speech_rate < 110:
+        st.info("Your speech rate is a bit slow. Slow speech can sometimes come across as hesitant.")
+    elif speech_rate > 170:
+        st.warning("Your speech rate is quite fast. Try slowing down to ensure clarity.")
+    else:
+        st.success("Great pace! Your speech rate is within the ideal range for interviews.")
+
+    st.subheader("🔍 Personal Pronoun Usage")
+    pronouns = personal_pronoun_ratio(transcript)
+    st.write(pronouns)
+    st.caption("Balance between 'I', 'we', and 'you' helps convey confidence and teamwork.")
+
+    st.subheader("📊 Speech Rate Over Time")
+    try:
+        times = [seg.start for seg in segments if seg.end - seg.start > 0]
+        lengths = [seg.end - seg.start for seg in segments if seg.end - seg.start > 0]
+        words = [len(seg.text.split()) for seg in segments if seg.end - seg.start > 0]
+        words_per_second = [w / l for w, l in zip(words, lengths)]
+
+        if not times or not words_per_second:
+            st.warning("Not enough valid segment data to generate graph.")
         else:
-            pacing_msg = "🔴 You're speaking quite quickly. Try pausing occasionally."
-
-        st.markdown(f"**Average Speech Rate:** {avg_rate} words/10s  \n{pacing_msg}")
-
-
-        # Silence detection
-        audio = AudioSegment.from_wav(audio_path)
-        silent_chunks = silence.detect_silence(audio, min_silence_len=1000, silence_thresh=audio.dBFS - 14)
-        silent_seconds = [(start / 1000.0, stop / 1000.0) for start, stop in silent_chunks]
-
-        # Filler and pronoun counts
-        filler_count = sum(len(re.findall(rf"\\b{re.escape(word)}\\b", full_text)) for word in FILLER_WORDS)
-        pronoun_counts = {
-            "i": len(re.findall(r"\\bi\\b", full_text)),
-            "we": len(re.findall(r"\\bwe\\b", full_text)),
-            "you": len(re.findall(r"\\byou\\b", full_text)),
-        }
-
-        st.subheader("🔊 Confidence and Tone Analysis")
-        emotion_model = pipeline("audio-classification", model="ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition")
-        y, sr = librosa.load(audio_path, sr=None)
-        total_duration = librosa.get_duration(y=y, sr=sr)
-
-        tone_metrics = []
-        for i in range(0, int(total_duration), CHUNK_DURATION):
-            start = i
-            end = min(i + CHUNK_DURATION, int(total_duration))
-            chunk_y = y[int(start * sr):int(end * sr)]
-            if len(chunk_y) < sr: continue
-            sf.write("chunk.wav", chunk_y, sr)
-            result = emotion_model("chunk.wav")
-            top_emotions = sorted(result, key=lambda x: x['score'], reverse=True)
-            confidence = top_emotions[0]['score']
-            variation = np.std(chunk_y)
-            is_monotone = variation < 0.01
-            tone_metrics.append({
-                "start": start,
-                "confidence": round(confidence, 3),
-                "variation": round(variation, 5),
-                "monotone": is_monotone,
-                "top_emotion": top_emotions[0]['label']
-            })
-
-        times = [f"{m['start']}s" for m in tone_metrics]
-        confidence_vals = [m['confidence'] for m in tone_metrics]
-        variation = [m['variation'] for m in tone_metrics]
-
-        fig2, ax1 = plt.subplots(figsize=(12, 5))
-        ax1.plot(times, confidence_vals, label="Confidence Level", marker='o')
-        ax1.set_ylabel("Confidence")
-        ax1.set_xlabel("Time")
-        ax1.tick_params(axis='x', rotation=45)
-
-        ax2 = ax1.twinx()
-        ax2.bar(times, variation, alpha=0.3, color='orange', label="Tone Variation")
-        ax2.set_ylabel("Tone Variation")
-
-        for i, m in enumerate(tone_metrics):
-            if m['monotone']:
-                ax1.axvline(x=times[i], color='red', linestyle='--', alpha=0.5)
-                ax1.text(times[i], 0, 'Monotone', rotation=90, color='red', fontsize=8, ha='center')
-
-        fig2.legend(loc="upper right")
-        ax1.set_title("Interview Confidence and Tone Analysis")
-        st.pyplot(fig2)
-
-        avg_conf = round(np.mean(confidence_vals), 2)
-        monotone_count = sum(m['monotone'] for m in tone_metrics)
-
-        st.markdown(f"""**💬 Average Confidence:** {avg_conf}  
-**Monotone Segments:** {monotone_count}""")
-
-        st.subheader("📋 Interview Summary Table")
-
-        def interpret_filler(count):
-            if count <= 3: return "Great! Minimal filler use.", "✅"
-            elif count <= 8: return "Moderate use — try reducing further.", "⚠️"
-            else: return "High — practice smoother transitions.", "❌"
-
-        def interpret_pronouns(i, we):
-            if i > 10 and we < 3: return "Try balancing 'I' with more 'we'.", "❌"
-            elif we > i: return "Strong collaboration emphasis.", "✅"
-            else: return "Balanced — well done.", "⚠️"
-
-        def interpret_pauses(p):
-            if p <= 2: return "Good pacing and minimal long pauses.", "✅"
-            elif p <= 5: return "Try to reduce long pauses.", "⚠️"
-            else: return "Too many pauses — rehearse for flow.", "❌"
-
-        filler_fb, filler_status = interpret_filler(filler_count)
-        pronoun_fb, pronoun_status = interpret_pronouns(pronoun_counts["i"], pronoun_counts["we"])
-        pause_fb, pause_status = interpret_pauses(len(silent_seconds))
-
-        feedback_df = pd.DataFrame({
-            "Metric": [
-                "Filler Words Used", "Times You Said 'I'", "Times You Said 'We'",
-                "Times You Said 'You'", "Detected Pauses >1s"
-            ],
-            "Your Count": [
-                filler_count, pronoun_counts["i"], pronoun_counts["we"],
-                pronoun_counts["you"], len(silent_seconds)
-            ],
-            "Ideal Range": [
-                "0–3 ideal (≤8 okay)", "5–12", "3–8", "1–4", "0–2 ideal (≤5 okay)"
-            ],
-            "Feedback": [
-                filler_fb, pronoun_fb, "", "", pause_fb
-            ],
-            "Status": [
-                filler_status, pronoun_status, "", "", pause_status
-            ]
-        })
-
-        st.dataframe(feedback_df, use_container_width=True)
-
-        st.subheader("🧠 LLM Feedback")
-        tokenizer = AutoTokenizer.from_pretrained("MBZUAI/LaMini-T5-738M")
-        model = AutoModelForSeq2SeqLM.from_pretrained("MBZUAI/LaMini-T5-738M")
-        llm = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
-
-        tone_summary = ", ".join(f"{m['start']}s: {m['top_emotion']}" for m in tone_metrics)
-        prompt = f'''
-You are a warm and constructive interview coach. Based on this tone data:
-
-Tone Timeline: {tone_summary}
-Average Confidence: {avg_conf}
-Monotone Segments: {monotone_count}
-
-1. Write one positive observation about the candidate’s vocal tone.
-2. Write one constructive suggestion.
-3. Suggest two specific tips that could help them improve.
-
-Each point should appear on a new line.
-'''
-        llm_feedback = llm(prompt, max_new_tokens=300, do_sample=False)[0]['generated_text']
-        st.markdown(f"""**LLM Feedback:**  
-{llm_feedback}""")
+            fig, ax = plt.subplots()
+            ax.plot(times, words_per_second, label="Speech Rate")
+            ax.set_xlabel("Time (s)")
+            ax.set_ylabel("Words per second")
+            ax.set_title("Speech Rate Over Time")
+            st.pyplot(fig)
+            st.caption("This chart shows how your speaking pace varied throughout the interview.")
+    except Exception as e:
+        st.error(f"Error generating graph: {str(e)}")
