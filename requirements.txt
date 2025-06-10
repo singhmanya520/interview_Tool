@@ -1,10 +1,10 @@
 streamlit
-faster-whisper
-pydub
-transformers
-librosa
-soundfile
-matplotlib
 numpy
 pandas
-
+matplotlib
+librosa
+soundfile
+transformers
+torch
+pydub
+whisper
