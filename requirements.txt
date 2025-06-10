@@ -1,0 +1,10 @@
+streamlit
+openai-whisper
+transformers
+librosa
+soundfile
+moviepy
+pydub
+matplotlib
+numpy
+pandas
