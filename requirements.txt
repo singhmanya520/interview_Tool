@@ -1,6 +1,5 @@
 streamlit
 faster-whisper
-moviepy
 pydub
 transformers
 librosa
@@ -8,3 +7,4 @@ soundfile
 matplotlib
 numpy
 pandas
+
