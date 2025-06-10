@@ -68,8 +68,8 @@ if uploaded_file is not None:
         else:
             pacing_msg = "🔴 You're speaking quite quickly. Try pausing occasionally."
 
-        st.markdown(f"**💬 Average Speech Rate:** {avg_rate} words/10s  
-{pacing_msg}")
+        st.markdown(f"""**💬 Average Speech Rate:** {avg_rate} words/10s  
+{pacing_msg}""")
 
         audio = AudioSegment.from_wav(audio_path)
         silent_chunks = silence.detect_silence(audio, min_silence_len=1000, silence_thresh=audio.dBFS - 14)
