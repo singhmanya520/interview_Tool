@@ -1,155 +1,153 @@
 import streamlit as st
-from faster_whisper import WhisperModel
 import os
-import re
+import tempfile
 import numpy as np
 import matplotlib.pyplot as plt
-from moviepy.editor import VideoFileClip
+import pandas as pd
+from faster_whisper import WhisperModel
 from pydub import AudioSegment, silence
 from transformers import pipeline
 import librosa
 import soundfile as sf
-import pandas as pd
-import tempfile
+import re
 
-# UI setup
-st.set_page_config(page_title="Mock Interview Analyzer", layout="wide")
-st.title("🎤 Mock Interview Feedback Tool")
-st.markdown("Upload a mock interview video (.mp4) to receive AI-powered feedback on pacing, tone, and delivery.")
+# --- STEP 1: File Upload ---
+st.title("🎤 Mock Interview Analyzer")
+uploaded_file = st.file_uploader("Upload your interview video (.mp4 or .mov)", type=["mp4", "mov"])
 
-# File upload
-uploaded_file = st.file_uploader("Upload your interview video", type=["mp4"])
+# --- STEP 2: Audio Extraction using pydub ---
+def extract_audio_from_video(video_path):
+    audio_path = "interview_audio.wav"
+    audio = AudioSegment.from_file(video_path)
+    audio.export(audio_path, format="wav")
+    return audio_path
 
-if uploaded_file:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-        tmp.write(uploaded_file.read())
-        VIDEO_PATH = tmp.name
-
-    AUDIO_PATH = "interview_audio.wav"
-    CHUNK_DURATION = 10  # in seconds
-    FILLER_WORDS = ["um", "uh", "like", "you know", "so", "actually", "basically", "right"]
-
-    st.info("🔄 Extracting audio...")
-    video = VideoFileClip(VIDEO_PATH)
-    video.audio.write_audiofile(AUDIO_PATH, codec='pcm_s16le')
-
-    # Transcribe using faster-whisper
-    st.info("🧠 Transcribing using faster-whisper...")
-    model = WhisperModel("base", compute_type="int8")
-    segments, info = model.transcribe(AUDIO_PATH, beam_size=5, word_timestamps=True)
-
+# --- STEP 3: Speech-to-Text ---
+def transcribe_audio_faster_whisper(audio_path):
+    model_size = "base"
+    model = WhisperModel(model_size, compute_type="int8", cpu_threads=4)
+    segments, _ = model.transcribe(audio_path)
     full_text = ""
-    word_timings = []
+    timestamps = []
     for segment in segments:
-        full_text += segment.text.lower() + " "
-        if segment.words:
-            for word in segment.words:
-                word_timings.append({
-                    "word": word.word.lower(),
-                    "start": word.start,
-                    "end": word.end
-                })
+        full_text += segment.text + " "
+        timestamps.append((segment.start, segment.end, segment.text))
+    return full_text.strip(), timestamps
 
-    duration = word_timings[-1]["end"] if word_timings else 0
-    bins = int(duration // CHUNK_DURATION) + 1
-    speech_rate = [0] * bins
-    for word in word_timings:
-        bin_index = int(word["start"] // CHUNK_DURATION)
-        speech_rate[bin_index] += 1
+# --- STEP 4: Filler Word Detection ---
+def count_filler_words(text):
+    filler_words = ["um", "uh", "like", "you know", "so", "actually"]
+    text_lower = text.lower()
+    count = sum(text_lower.count(filler) for filler in filler_words)
+    return count
 
-    st.subheader("📊 Speech Rate Over Time")
-    fig, ax = plt.subplots()
-    ax.plot(range(len(speech_rate)), speech_rate, marker='o')
-    ax.set_xlabel("Time Segment (10s intervals)")
-    ax.set_ylabel("Words Spoken")
-    ax.set_title("Speech Rate Across Interview")
-    st.pyplot(fig)
+# --- STEP 5: Personal Pronoun Ratio ---
+def count_pronouns(text):
+    text = text.lower()
+    return text.count("i"), text.count("we"), text.count("you")
 
-    avg_rate = np.mean(speech_rate)
-    st.markdown("#### 💬 Interpretation: Speech Pacing")
-    st.write(f"**Average speech rate:** {avg_rate:.1f} words per 10 seconds.")
-    if avg_rate < 20:
-        st.warning("🟠 You spoke quite slowly. This can sometimes come across as uncertainty or hesitation.")
-    elif avg_rate > 35:
-        st.warning("🔴 You spoke quite fast. Try pausing more — fast pacing can affect clarity and confidence.")
-    else:
-        st.success("🟢 You're in the ideal range. Good clarity and confidence.")
+# --- STEP 6: Pause Detection from Audio ---
+def detect_pauses(audio_path):
+    sound = AudioSegment.from_wav(audio_path)
+    silent_chunks = silence.detect_silence(sound, min_silence_len=1000, silence_thresh=sound.dBFS-14)
+    return len(silent_chunks)
 
-    # Detect filler words
-    st.subheader("📉 Filler Word Usage")
-    filler_count = sum(full_text.count(f) for f in FILLER_WORDS)
-    st.write(f"**Filler words used:** {filler_count}")
-    if filler_count <= 3:
-        st.success("✅ Great! Minimal filler use.")
-    elif filler_count <= 8:
-        st.warning("🟠 Acceptable, but try reducing filler words to sound more confident.")
-    else:
-        st.error("🔴 High filler usage — work on pausing naturally instead of using filler words.")
+# --- STEP 7: Speech Pacing ---
+def calculate_speech_rate(transcript, timestamps):
+    total_words = len(transcript.split())
+    total_time = timestamps[-1][1] - timestamps[0][0]
+    rate = total_words / (total_time / 10)
+    return round(rate, 1)
 
-    # Analyze pauses
-    st.subheader("⏸️ Detected Pauses")
-    audio = AudioSegment.from_wav(AUDIO_PATH)
-    silent_chunks = silence.detect_silence(audio, min_silence_len=1000, silence_thresh=audio.dBFS - 14)
-    num_pauses = len(silent_chunks)
-    st.write(f"**Pauses over 1 second:** {num_pauses}")
-    if num_pauses <= 2:
-        st.success("✅ Great flow and minimal hesitation.")
-    elif num_pauses <= 5:
-        st.warning("🟠 A few long pauses — consider rehearsing more for flow.")
-    else:
-        st.error("🔴 Too many pauses — this may signal uncertainty.")
-
-    # Personal pronoun count
-    st.subheader("🧠 Language Balance")
-    i_count = full_text.count("i ")
-    we_count = full_text.count("we ")
-    you_count = full_text.count("you ")
-    st.write(f"**'I' used:** {i_count}")
-    st.write(f"**'We' used:** {we_count}")
-    st.write(f"**'You' used:** {you_count}")
-    if i_count > 15 and we_count < 3:
-        st.warning("🟠 Try to balance 'I' with more 'we' to show teamwork.")
-
-    # Tone and emotion estimation
-    st.subheader("🎙️ Vocal Tone & Confidence")
+# --- STEP 8: Emotion Detection ---
+def detect_emotion(audio_path):
     classifier = pipeline("audio-classification", model="ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition")
-    preds = classifier(AUDIO_PATH, top_k=5)
-    labels = [p['label'] for p in preds]
-    scores = [p['score'] for p in preds]
-    avg_conf = np.mean(scores)
-    st.write(f"**Top detected emotions:** {labels}")
-    st.write(f"**Average confidence score:** {avg_conf:.2f}")
-    if avg_conf < 0.2:
-        st.error("🔴 Tone sounds flat or unsure — project more.")
-    elif avg_conf < 0.5:
-        st.warning("🟠 Moderate expressiveness — try emphasizing key points more.")
+    data, rate = librosa.load(audio_path, sr=16000)
+    sf.write("temp_emotion.wav", data, rate)
+    results = classifier("temp_emotion.wav")
+    top_result = max(results, key=lambda x: x['score'])
+    return top_result['label'], round(top_result['score'], 2)
+
+# --- STEP 9: Tone Interpretation ---
+def interpret_tone(confidence_score):
+    if confidence_score >= 0.5:
+        return "🟢 Your tone is fairly confident and expressive — interviewers will likely respond well to this."
+    elif 0.2 <= confidence_score < 0.5:
+        return "🟡 Your tone sounds neutral. Consider adding vocal variation to maintain engagement."
     else:
-        st.success("🟢 Excellent variation — your tone shows confidence and engagement.")
+        return "🔴 Your tone sounds flat or unsure — try projecting more."
 
-    # Summary
-    st.subheader("📋 Final Interview Coach Summary")
-    summary_df = pd.DataFrame([
-        {"Metric": "Filler Words Used", "Your Count": filler_count, "Ideal Range": "0–3 ideal (≤8 okay)",
-         "Feedback": "Great! Minimal filler use." if filler_count <= 3 else
-                     "Okay, but reduce fillers." if filler_count <= 8 else
-                     "Too many filler words — practice smoother transitions.",
-         "Status": "✅" if filler_count <= 3 else "⚠️" if filler_count <= 8 else "❌"},
-        {"Metric": "'I' Count", "Your Count": i_count, "Ideal Range": "5–12",
-         "Feedback": "Try balancing 'I' with more 'we' for teamwork.",
-         "Status": "✅" if 5 <= i_count <= 12 else "❌"},
-        {"Metric": "'We' Count", "Your Count": we_count, "Ideal Range": "3–8",
-         "Feedback": "",
-         "Status": "✅" if 3 <= we_count <= 8 else "⚠️"},
-        {"Metric": "'You' Count", "Your Count": you_count, "Ideal Range": "1–4",
-         "Feedback": "",
-         "Status": "✅" if 1 <= you_count <= 4 else "⚠️"},
-        {"Metric": "Pauses >1s", "Your Count": num_pauses, "Ideal Range": "0–2 ideal (≤5 okay)",
-         "Feedback": "Too many pauses — rehearse for flow." if num_pauses > 5 else
-                     "Some pauses, but acceptable." if num_pauses > 2 else
-                     "Great flow!",
-         "Status": "✅" if num_pauses <= 2 else "⚠️" if num_pauses <= 5 else "❌"},
-    ])
-    st.dataframe(summary_df, use_container_width=True)
+# --- STEP 10: Speech Rate Feedback ---
+def interpret_speech_rate(rate):
+    if rate >= 25 and rate <= 35:
+        return "🟢 You're in the ideal range. Good clarity and confidence."
+    elif rate < 25:
+        return "🟡 Your current rate is under the average. Speaking slowly can sometimes come off as hesitancy or uncertainty."
+    else:
+        return "🔴 You're speaking quite fast — this may make you sound nervous or unclear."
 
-    st.markdown("---")
-    st.markdown("Made with ❤️ for mock interview improvement.")
+# --- STEP 11: LLM-style Dynamic Feedback ---
+def generate_llm_feedback(pronouns, filler_count, pause_count, tone_score, speech_rate):
+    feedback = []
+
+    # Pronouns
+    if pronouns[0] > 15 and pronouns[1] < 3:
+        feedback.append("You used 'I' quite a lot. Try to incorporate more team-oriented language like 'we'.")
+
+    # Filler words
+    if filler_count > 8:
+        feedback.append(f"You used filler words {filler_count} times — this can reduce your clarity. Practice slowing down and pausing instead of using fillers.")
+    elif 4 <= filler_count <= 8:
+        feedback.append(f"You used filler words {filler_count} times. It’s okay, but keep an eye on it.")
+
+    # Pauses
+    if pause_count > 5:
+        feedback.append("There were many long pauses — rehearsing your responses could improve your flow.")
+
+    # Tone
+    if tone_score < 0.2:
+        feedback.append("Your tone was flat at times. Projecting your voice more could make you sound more confident.")
+
+    # Speech rate
+    if speech_rate < 25:
+        feedback.append("You spoke a bit slowly — try to maintain a steady pace to convey energy.")
+    elif speech_rate > 35:
+        feedback.append("You spoke quickly — slowing down slightly could help with clarity.")
+
+    return feedback
+
+# --- MAIN ---
+if uploaded_file is not None:
+    with st.spinner("⏳ Processing video..."):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+            tmp.write(uploaded_file.read())
+            tmp_path = tmp.name
+
+        audio_path = extract_audio_from_video(tmp_path)
+        transcript, timestamps = transcribe_audio_faster_whisper(audio_path)
+        filler_count = count_filler_words(transcript)
+        pronouns = count_pronouns(transcript)
+        pause_count = detect_pauses(audio_path)
+        speech_rate = calculate_speech_rate(transcript, timestamps)
+        emotion, tone_score = detect_emotion(audio_path)
+
+    st.header("📝 Transcript")
+    st.write(transcript)
+
+    st.header("📊 Interview Feedback Summary")
+    st.markdown(f"""
+    - **Filler Words Used:** {filler_count}
+    - **Pronouns Used:** I = {pronouns[0]}, We = {pronouns[1]}, You = {pronouns[2]}
+    - **Detected Pauses (>1s):** {pause_count}
+    - **Speech Rate:** {speech_rate} words per 10 seconds
+    - **Vocal Emotion:** {emotion} (confidence score: {tone_score})
+    """)
+
+    st.header("💬 Interpretation")
+    st.markdown(interpret_speech_rate(speech_rate))
+    st.markdown(interpret_tone(tone_score))
+
+    st.header("🧠 LLM-Style Feedback")
+    feedback_list = generate_llm_feedback(pronouns, filler_count, pause_count, tone_score, speech_rate)
+    for point in feedback_list:
+        st.markdown(f"- {point}")
