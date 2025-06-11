@@ -9,7 +9,7 @@ import librosa
 import librosa.display
 import soundfile as sf
 import whisper
-from faster_whisper import WhisperModel
+# from faster_whisper import WhisperModel
 from pydub import AudioSegment, silence
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
 import pandas as pd
@@ -28,11 +28,11 @@ def convert_to_wav(file_path):
     audio.export(wav_path, format="wav")
     return wav_path
 
-def transcribe_audio(audio_path):
-    model = WhisperModel("base", device="cpu", compute_type="int8")
-    segments, _ = model.transcribe(audio_path, word_timestamps=True)
-    transcription = " ".join([seg.text for seg in segments])
-    return transcription, list(segments)
+# def transcribe_audio(audio_path):
+#     model = WhisperModel("base", device="cpu", compute_type="int8")
+#     segments, _ = model.transcribe(audio_path, word_timestamps=True)
+#     transcription = " ".join([seg.text for seg in segments])
+#     return transcription, list(segments)
 
 def transcribe_audio_legacy(audio_path):
     model = whisper.load_model("base")
